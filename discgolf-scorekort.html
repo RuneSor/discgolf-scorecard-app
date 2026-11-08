@@ -317,10 +317,122 @@
     gap:10px;
   }
   .modal-actions .btn{ flex:1; }
+
+  /* Small rounded button, e.g. "Bruk" and "Kart" */
+  .btn-pill{
+    background: var(--surface);
+    color: var(--pine-dark);
+    border:1.5px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-family:'Inter',sans-serif;
+    font-size:14px;
+    font-weight:600;
+    cursor:pointer;
+    display:flex; align-items:center; gap:6px;
+    flex-shrink:0;
+  }
+  .btn-pill:active{ background: var(--bg); }
+
+  /* Map */
+  .btn-map{ margin-left:auto; }
+  .btn-map .has-tee{
+    width:8px; height:8px; border-radius:50%;
+    background: var(--gold);
+  }
+  .map-overlay{
+    position: fixed;
+    inset: 0;
+    background: rgba(29,51,39,0.45);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding: max(16px, env(safe-area-inset-top)) 12px max(16px, env(safe-area-inset-bottom));
+    z-index: 200;
+  }
+  .map-overlay[hidden]{ display:none; }
+  .map-box{
+    background: var(--surface);
+    border: 3px solid var(--pine);
+    border-radius: var(--radius);
+    width: 100%;
+    max-width: 480px;
+    height: 100%;
+    max-height: 640px;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    box-shadow: 0 12px 40px rgba(29,51,39,0.3);
+  }
+  .map-head{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding: 10px 10px 10px 14px;
+    border-bottom: 1.5px solid var(--line);
+  }
+  .map-head h2{ font-size:22px; color: var(--pine-dark); text-transform:uppercase; margin-right:auto; }
+  .map-head h2 span{ color: var(--ink-soft); font-size:16px; font-weight:700; }
+  .map-layer-btn{
+    background: var(--bg);
+    border:1.5px solid var(--line);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-family:'Inter',sans-serif;
+    font-size:13px;
+    font-weight:600;
+    color: var(--pine-dark);
+    cursor:pointer;
+  }
+  #map{ flex:1; min-height:0; background: var(--bg); }
+  .map-foot{
+    padding: 10px 12px 12px;
+    border-top: 1.5px solid var(--line);
+  }
+  .map-status{
+    font-size:14px;
+    color: var(--ink-soft);
+    margin-bottom: 10px;
+    min-height: 1.4em;
+    text-align:center;
+  }
+  .map-status b{ color: var(--ink); }
+  .map-actions{ display:flex; gap:10px; }
+  .map-actions .btn{ flex:1; }
+  .tee-icon{
+    width:30px; height:30px;
+    border-radius:50% 50% 50% 0;
+    transform: rotate(-45deg);
+    background: var(--gold);
+    border: 2.5px solid #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .tee-icon span{
+    transform: rotate(45deg);
+    font-family:'Barlow Condensed', sans-serif;
+    font-weight:800;
+    font-size:15px;
+    color: var(--pine-dark);
+  }
 </style>
 </head>
 <body>
 <div id="root"></div>
+<div id="mapOverlay" class="map-overlay" hidden onclick="if(event.target===this) closeMap()">
+  <div class="map-box" role="dialog" aria-label="Kart">
+    <div class="map-head">
+      <h2 id="mapTitle"></h2>
+      <button class="map-layer-btn" id="mapLayerBtn" onclick="toggleMapLayer()"></button>
+      <button class="icon-btn" onclick="closeMap()" aria-label="Lukk kart">✕</button>
+    </div>
+    <div id="map"></div>
+    <div class="map-foot">
+      <div class="map-status" id="mapStatus"></div>
+      <div class="map-actions" id="mapActions"></div>
+    </div>
+  </div>
+</div>
 
 <script>
 // ---------- State ----------
@@ -334,6 +446,10 @@ let state = {
   nextPlayerId: 1,
   pendingTemplatePars: null,
   pendingTemplateName: null,
+  pendingTemplateTees: null,
+  pendingTemplateId: null,
+  tees: [], // tees[holeIdx] = {lat, lng} or null
+  templateId: null, // id of the course template this round was started from (or last saved as)
 };
 
 let courseTemplates = [];
@@ -355,8 +471,11 @@ function saveCourseAsTemplate(){
   setTimeout(() => { const el = document.getElementById('modalInput'); if (el) el.focus(); }, 0);
 }
 function doSaveCourseAsTemplate(name){
-  courseTemplates.push({ id: Date.now(), name: name, numHoles: state.numHoles, pars: state.pars.slice() });
+  const id = Date.now();
+  courseTemplates.push({ id, name, numHoles: state.numHoles, pars: state.pars.slice(), tees: teesForRound() });
   saveTemplates();
+  // The new template is now the one in use, so later tee updates go to it
+  state.templateId = id;
 }
 function useTemplate(id){
   const tmpl = courseTemplates.find(t => t.id === id);
@@ -364,6 +483,8 @@ function useTemplate(id){
   state.numHoles = tmpl.numHoles;
   state.pendingTemplatePars = tmpl.pars.slice();
   state.pendingTemplateName = tmpl.name;
+  state.pendingTemplateTees = Array.isArray(tmpl.tees) ? tmpl.tees.slice() : null;
+  state.pendingTemplateId = tmpl.id;
   render();
 }
 function deleteTemplate(id){
@@ -433,18 +554,27 @@ function removePlayer(id){
 }
 function updateHoleCount(v){
   state.numHoles = clamp(parseInt(v)||1, 1, 36);
+  clearPendingTemplate();
+}
+function clearPendingTemplate(){
   state.pendingTemplatePars = null;
   state.pendingTemplateName = null;
+  state.pendingTemplateTees = null;
+  state.pendingTemplateId = null;
 }
 function startRound(){
   if (state.players.length === 0) return;
-  if (state.pendingTemplatePars && state.pendingTemplatePars.length === state.numHoles) {
+  const fromTemplate = state.pendingTemplatePars && state.pendingTemplatePars.length === state.numHoles;
+  if (fromTemplate) {
     state.pars = state.pendingTemplatePars.slice();
+    state.templateId = state.pendingTemplateId;
   } else {
     state.pars = Array(state.numHoles).fill(3);
+    state.templateId = null;
   }
-  state.pendingTemplatePars = null;
-  state.pendingTemplateName = null;
+  state.tees = Array.from({length: state.numHoles}, (_, i) =>
+    (fromTemplate && state.pendingTemplateTees && state.pendingTemplateTees[i]) || null);
+  clearPendingTemplate();
   state.players.forEach(p => { state.scores[p.id] = Array(state.numHoles).fill(null); });
   state.currentHole = 0;
   state.phase = 'play';
@@ -481,7 +611,9 @@ function newRound(){
   render();
 }
 function doNewRound(){
-  state = { phase:'setup', numHoles:18, players:[], pars:[], scores:{}, currentHole:0, nextPlayerId:1, pendingTemplatePars:null, pendingTemplateName:null };
+  state = { phase:'setup', numHoles:18, players:[], pars:[], scores:{}, currentHole:0, nextPlayerId:1,
+    pendingTemplatePars:null, pendingTemplateName:null, pendingTemplateTees:null, pendingTemplateId:null,
+    tees:[], templateId:null };
   try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
 }
 
@@ -504,6 +636,30 @@ function confirmModalAction(){
     else if (action === 'deleteTemplate') doDeleteTemplate(payload);
   }
   render();
+}
+
+// ---------- Tees ----------
+// Rounds saved before tees existed have no tees array, so always read through these helpers
+function teeFor(holeIdx){
+  return (Array.isArray(state.tees) && state.tees[holeIdx]) || null;
+}
+function teesForRound(){
+  return Array.from({length: state.numHoles}, (_, i) => teeFor(i));
+}
+// Returns the name of the template that was updated, or null
+function setTee(holeIdx, lat, lng){
+  const tee = { lat: +lat.toFixed(6), lng: +lng.toFixed(6) };
+  state.tees = teesForRound();
+  state.tees[holeIdx] = tee;
+  // Keep the course template in use up to date
+  const tmpl = courseTemplates.find(t => t.id === state.templateId);
+  if (tmpl && tmpl.numHoles === state.numHoles) {
+    tmpl.tees = Array.from({length: tmpl.numHoles}, (_, i) => (tmpl.tees && tmpl.tees[i]) || null);
+    tmpl.tees[holeIdx] = tee;
+    saveTemplates();
+  }
+  render();
+  return tmpl && tmpl.numHoles === state.numHoles ? tmpl.name : null;
 }
 
 // ---------- Totals ----------
@@ -540,7 +696,7 @@ function renderSetup(){
         ${courseTemplates.length ? courseTemplates.map(t => `
           <div class="player-row">
             <div class="name">${escapeHtml(t.name)} <span style="color:var(--muted); font-weight:400;">(${t.numHoles} hull)</span></div>
-            <button class="btn-ghost" style="padding:6px 8px;" onclick="useTemplate(${t.id})">Bruk</button>
+            <button class="btn-pill" onclick="useTemplate(${t.id})">Bruk</button>
             <button class="icon-btn" onclick="deleteTemplate(${t.id})" aria-label="Slett bane">✕</button>
           </div>
         `).join('') : '<div style="color:var(--muted); font-size:14px; padding:6px 0;">Ingen lagrede baner enda</div>'}
@@ -597,7 +753,10 @@ function renderPlay(){
   }).join('');
 
   return `
-    <div class="topbar">${chainmarkSVG(26)}<h1 style="font-size:22px;">Scorekort</h1></div>
+    <div class="topbar">
+      ${chainmarkSVG(26)}<h1 style="font-size:22px;">Scorekort</h1>
+      <button class="btn-pill btn-map" onclick="openMap()" aria-label="Vis kart">📍 Kart${teeFor(h) ? '<span class="has-tee" title="Utkast lagret"></span>' : ''}</button>
+    </div>
     <div class="hole-header">
       <button class="nav-arrow" onclick="goHole(-1)" ${h===0 ? 'disabled':''} aria-label="Forrige hull">‹</button>
       <div class="hole-title">
@@ -732,6 +891,248 @@ function render(){
   else html = renderSummary();
   root.innerHTML = html + renderModal();
   saveState();
+}
+
+// ---------- Map ----------
+// Leaflet is loaded lazily the first time the map is opened, so the scorecard works offline.
+const LEAFLET_URL = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/';
+const LEAFLET_SRI = {
+  js:  'sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g==',
+  css: 'sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==',
+};
+const MAP_LAYERS = {
+  map: {
+    label: 'Kart',
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attr: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxNativeZoom: 19,
+  },
+  photo: {
+    label: 'Flyfoto',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attr: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+    maxNativeZoom: 18,
+  },
+};
+const MAP_LAYER_KEY = 'discgolf_kartlag_v1';
+const POOR_GPS_M = 25; // warn when accuracy is worse than this
+
+let mapLayerKey = 'map';
+try { const k = localStorage.getItem(MAP_LAYER_KEY); if (MAP_LAYERS[k]) mapLayerKey = k; } catch(e) {}
+
+let leafletPromise = null;
+let lmap = null, mapTiles = null, teeMarker = null, posMarker = null, accCircle = null;
+let mapHole = 0;          // hole shown in the map (the active hole when the map was opened)
+let mapLoadFailed = false;
+let fitPending = false;   // re-fit the view once the first GPS fix arrives
+let confirmReplace = false;
+let mapNote = '', mapNoteTimer = null;
+let gpsWatch = null, gpsPos = null, gpsError = null;
+
+function loadLeaflet(){
+  if (window.L) return Promise.resolve();
+  if (!leafletPromise){
+    leafletPromise = new Promise((resolve, reject) => {
+      const css = document.createElement('link');
+      css.rel = 'stylesheet';
+      css.href = LEAFLET_URL + 'leaflet.min.css';
+      css.integrity = LEAFLET_SRI.css;
+      css.crossOrigin = 'anonymous';
+      const js = document.createElement('script');
+      js.src = LEAFLET_URL + 'leaflet.min.js';
+      js.integrity = LEAFLET_SRI.js;
+      js.crossOrigin = 'anonymous';
+      js.onload = () => resolve();
+      js.onerror = () => { leafletPromise = null; css.remove(); js.remove(); reject(); };
+      document.head.appendChild(css);
+      document.head.appendChild(js);
+    });
+  }
+  return leafletPromise;
+}
+
+function isMapOpen(){ return !document.getElementById('mapOverlay').hidden; }
+
+function openMap(){
+  mapHole = state.currentHole;
+  confirmReplace = false;
+  mapLoadFailed = false;
+  fitPending = true;
+  setMapNote('');
+  document.getElementById('mapOverlay').hidden = false;
+  document.getElementById('mapTitle').innerHTML = `Hull ${mapHole+1} <span>· par ${state.pars[mapHole]}</span>`;
+  updateLayerBtn();
+  updateMapFoot();
+  startGps();
+  loadLeaflet().then(() => {
+    if (!isMapOpen()) return;
+    initMap();
+    lmap.invalidateSize();
+    showTee();
+    updateGpsMarker();
+    fitMapView();
+    if (gpsPos) fitPending = false;
+  }).catch(() => {
+    mapLoadFailed = true;
+    updateMapFoot();
+  });
+}
+
+function closeMap(){
+  document.getElementById('mapOverlay').hidden = true;
+  stopGps();
+  confirmReplace = false;
+  gpsPos = null;
+  if (posMarker){ lmap.removeLayer(posMarker); lmap.removeLayer(accCircle); posMarker = accCircle = null; }
+}
+
+function initMap(){
+  if (lmap) return;
+  lmap = L.map('map').setView([62, 10], 5);
+  // Don't yank the view around once the user has started panning
+  lmap.on('dragstart', () => { fitPending = false; });
+  setMapLayer(mapLayerKey);
+}
+
+function setMapLayer(key){
+  mapLayerKey = key;
+  try { localStorage.setItem(MAP_LAYER_KEY, key); } catch(e) {}
+  updateLayerBtn();
+  if (!lmap) return;
+  const cfg = MAP_LAYERS[key];
+  if (mapTiles) lmap.removeLayer(mapTiles);
+  mapTiles = L.tileLayer(cfg.url, { attribution: cfg.attr, maxNativeZoom: cfg.maxNativeZoom, maxZoom: 20 }).addTo(lmap);
+}
+function toggleMapLayer(){ setMapLayer(mapLayerKey === 'map' ? 'photo' : 'map'); }
+function updateLayerBtn(){
+  // The button shows the layer you switch *to*
+  document.getElementById('mapLayerBtn').textContent = MAP_LAYERS[mapLayerKey === 'map' ? 'photo' : 'map'].label;
+}
+
+function fitMapView(){
+  if (!lmap) return;
+  const tee = teeFor(mapHole);
+  if (tee && gpsPos && distanceM(tee, gpsPos) < 1500){
+    lmap.fitBounds([[tee.lat, tee.lng], [gpsPos.lat, gpsPos.lng]], { padding:[50,50], maxZoom:18 });
+  } else if (tee){
+    lmap.setView([tee.lat, tee.lng], 18);
+  } else if (gpsPos){
+    lmap.setView([gpsPos.lat, gpsPos.lng], 18);
+  }
+}
+
+function showTee(){
+  if (!lmap) return;
+  const tee = teeFor(mapHole);
+  if (!tee){
+    if (teeMarker){ lmap.removeLayer(teeMarker); teeMarker = null; }
+    return;
+  }
+  const icon = L.divIcon({
+    className: 'tee-marker',
+    html: `<div class="tee-icon"><span>${mapHole+1}</span></div>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 36], // tip of the rotated pin
+  });
+  if (!teeMarker){
+    teeMarker = L.marker([tee.lat, tee.lng], { icon, draggable:true, zIndexOffset:1000, title:'Utkast' }).addTo(lmap);
+    teeMarker.on('dragend', () => {
+      const ll = teeMarker.getLatLng();
+      const tmplName = setTee(mapHole, ll.lat, ll.lng);
+      setMapNote(`Utkast flyttet${tmplName ? ` og lagret i «${escapeHtml(tmplName)}»` : ''} ✓`);
+    });
+  } else {
+    teeMarker.setLatLng([tee.lat, tee.lng]).setIcon(icon);
+  }
+}
+
+function startGps(){
+  gpsError = null;
+  if (!navigator.geolocation){ gpsError = 'Enheten støtter ikke posisjon.'; return; }
+  if (gpsWatch !== null) return;
+  gpsWatch = navigator.geolocation.watchPosition(onGps, onGpsError,
+    { enableHighAccuracy:true, maximumAge:5000, timeout:20000 });
+}
+function stopGps(){
+  if (gpsWatch !== null){ navigator.geolocation.clearWatch(gpsWatch); gpsWatch = null; }
+}
+function onGps(p){
+  gpsPos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy) };
+  gpsError = null;
+  updateGpsMarker();
+  if (fitPending && lmap){ fitMapView(); fitPending = false; }
+  updateMapFoot();
+}
+function onGpsError(e){
+  if (e.code === 1) gpsError = 'Ingen tilgang til posisjon. Tillat stedstjenester for nettleseren.';
+  else if (!gpsPos) gpsError = 'Finner ikke posisjonen din.';
+  updateMapFoot();
+}
+function updateGpsMarker(){
+  if (!lmap || !gpsPos) return;
+  const ll = [gpsPos.lat, gpsPos.lng];
+  if (!posMarker){
+    accCircle = L.circle(ll, { radius: gpsPos.acc, color:'#2b7bd6', weight:1, fillOpacity:0.12, interactive:false }).addTo(lmap);
+    posMarker = L.circleMarker(ll, { radius:8, color:'#fff', weight:3, fillColor:'#2b7bd6', fillOpacity:1, interactive:false }).addTo(lmap);
+  } else {
+    posMarker.setLatLng(ll);
+    accCircle.setLatLng(ll).setRadius(gpsPos.acc);
+  }
+}
+
+function distanceM(a, b){
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+  const h = Math.sin(dLat/2)**2 + Math.cos(a.lat*rad) * Math.cos(b.lat*rad) * Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function setMapNote(html){
+  mapNote = html;
+  clearTimeout(mapNoteTimer);
+  if (html) mapNoteTimer = setTimeout(() => { mapNote = ''; updateMapFoot(); }, 4000);
+  updateMapFoot();
+}
+
+function updateMapFoot(){
+  const tee = teeFor(mapHole);
+  let status;
+  if (mapLoadFailed) status = 'Kunne ikke laste kartet. Sjekk nettforbindelsen.';
+  else if (confirmReplace) status = `Erstatte lagret utkast for hull ${mapHole+1} med posisjonen din?`;
+  else if (mapNote) status = mapNote;
+  else if (gpsError) status = gpsError;
+  else if (!gpsPos) status = 'Finner posisjonen din…';
+  else if (tee) status = `Avstand til utkast: <b>${Math.round(distanceM(tee, gpsPos))} m</b> · GPS ±${gpsPos.acc} m<br><small>Dra markøren for å finjustere</small>`;
+  else status = `Ingen utkast lagret for hull ${mapHole+1} · GPS ±${gpsPos.acc} m`;
+
+  const actions = confirmReplace
+    ? `<button class="btn btn-secondary" onclick="cancelReplaceTee()">Avbryt</button>
+       <button class="btn btn-primary" onclick="saveTeeHere()">Erstatt</button>`
+    : `<button class="btn btn-primary" onclick="saveTeeHere()" ${gpsPos ? '' : 'disabled'}>Lagre utkast her</button>`;
+
+  document.getElementById('mapStatus').innerHTML = status;
+  // Only touch the buttons when they change; GPS updates every second and would otherwise eat taps
+  const actionsEl = document.getElementById('mapActions');
+  if (actionsEl.dataset.html !== actions){ actionsEl.innerHTML = actions; actionsEl.dataset.html = actions; }
+}
+
+function saveTeeHere(){
+  if (!gpsPos) return;
+  if (teeFor(mapHole) && !confirmReplace){
+    confirmReplace = true;
+    updateMapFoot();
+    return;
+  }
+  confirmReplace = false;
+  const tmplName = setTee(mapHole, gpsPos.lat, gpsPos.lng);
+  showTee();
+  let note = `Utkast lagret for hull ${mapHole+1}${tmplName ? ` og i «${escapeHtml(tmplName)}»` : ''} ✓`;
+  if (gpsPos.acc > POOR_GPS_M) note += `<br><small>Unøyaktig GPS (±${gpsPos.acc} m) – dra markøren til riktig sted</small>`;
+  setMapNote(note);
+}
+function cancelReplaceTee(){
+  confirmReplace = false;
+  updateMapFoot();
 }
 
 loadState();

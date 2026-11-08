@@ -26,8 +26,10 @@ Repo: github.com/RuneSor/discgolf-scorecard-app. Aldri commit eller push rett ti
 ## Arkitektur
 - All tilstand ligger i ett `state`-objekt (`phase`: `setup` | `play` | `summary`). Endringer skjer i små funksjoner som så kaller `render()`, som tegner hele skjermen på nytt (`renderSetup`, `renderPlay`, `renderSummary`, `renderModal`).
 - `modal` er midlertidig UI-tilstand og lagres ikke.
-- Lagring i localStorage: runden under `discgolf_scorekort_v1`, banemaler under `discgolf_baner_v1`. Endres formatet på en måte som ikke er bakoverkompatibel, bump versjonen i nøkkelen eller migrer gamle data.
+- Lagring i localStorage: runden under `discgolf_scorekort_v1`, banemaler under `discgolf_baner_v1`, valgt kartlag under `discgolf_kartlag_v1`. Endres formatet på en måte som ikke er bakoverkompatibel, bump versjonen i nøkkelen eller migrer gamle data.
 - Brukerinput som vises i HTML skal gjennom `escapeHtml`.
+- Kart: kartboksen (`#mapOverlay`) ligger utenfor `#root` slik at `render()` ikke river ned Leaflet-kartet. Den oppdateres med egne funksjoner (`openMap`, `updateMapFoot` osv.).
+- Utkast per hull ligger i `state.tees[hull] = {lat, lng}` (eller `null`) og i malen som `tees`. Les alltid via `teeFor()`, siden eldre runder og maler mangler feltet. `state.templateId` er malen runden bruker; `setTee()` oppdaterer den.
 
 ## Konvensjoner
 - Kommentarer i kode skrives på engelsk (noen eldre kommentarer er på norsk; oversett dem når du likevel endrer koden der).
@@ -35,7 +37,10 @@ Repo: github.com/RuneSor/discgolf-scorecard-app. Aldri commit eller push rett ti
 - Alle kall til localStorage pakkes i try/catch (lagring kan være blokkert, f.eks. i sandkasse-forhåndsvisninger).
 - Mobil først: maks bredde 480 px, store trykkflater, ingen tastatur nødvendig under spilling. Respekter safe-area (`env(safe-area-inset-*)`) for iPhone.
 - Farger ligger som CSS-variabler i `:root`; bruk dem i stedet for nye hardkodede farger.
-- Ingen eksterne avhengigheter utover Google Fonts (Barlow Condensed, Inter). Ingen rammeverk, ingen byggesteg.
+- Ingen eksterne avhengigheter utover Google Fonts (Barlow Condensed, Inter) og Leaflet 1.9.4 fra cdnjs (med SRI). Leaflet lastes først når kartet åpnes, så resten av appen virker uten nett. Ingen rammeverk, ingen byggesteg.
+- Kartlag: OpenStreetMap (standard) og Esri World Imagery (flyfoto). URL-er og kreditering ligger i `MAP_LAYERS`. Krediteringen må alltid synes i kartet.
+- GPS krever HTTPS (localhost er unntatt).
 
 ## Test
 Ingen automatiske tester ennå. Verifiser manuelt i nettleseren: sett opp runde, registrer poeng, se scorekort, lagre/bruke bane, spill på nytt, og at runden overlever omlasting av siden. Test gjerne også på iPhone.
+For kart: lagre utkast, dra markøren, bytt kartlag, og sjekk at malen i bruk blir oppdatert. I Chrome kan posisjonen simuleres i DevTools (Sensors → Location).

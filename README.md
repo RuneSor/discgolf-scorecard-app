@@ -10,6 +10,7 @@ En superenkel, dynamisk scorekort-app for discgolf. Fungerer for enhver bane og 
   - [1. Sett opp runden](#1-sett-opp-runden)
   - [2. Registrer poeng](#2-registrer-poeng)
   - [3. Se scorekort](#3-se-scorekort)
+- [Kart og utkast](#kart-og-utkast)
 - [Lagrede baner (maler)](#lagrede-baner-maler)
 - [Spill på nytt med samme spillere](#spill-på-nytt-med-samme-spillere)
 - [Bruk som app på iPhone](#bruk-som-app-på-iphone)
@@ -23,6 +24,7 @@ En superenkel, dynamisk scorekort-app for discgolf. Fungerer for enhver bane og 
 - 📊 **Automatisk +/-** – viser birdie/bogey osv. live, fargekodet
 - 📋 **Fullt scorekort** – oversikt over alle hull, totalt antall kast og total +/- per spiller
 - 💾 **Lagrede baner** – lagre en bane (antall hull + par) som en mal og gjenbruk den senere
+- 🗺️ **Kart med utkast** – se hvor du er på kart eller flyfoto, og lagre utkastet for hvert hull
 - 🔁 **Spill på nytt** – nullstill poengene og spill samme bane om igjen med samme spillere
 - 📱 **Husker runden** – runden lagres automatisk på enheten og overlever at du lukker appen, helt til du starter en ny runde
 - 🚫 **Ingen servere, ingen kontoer** – alt kjører lokalt i nettleseren
@@ -64,6 +66,19 @@ open discgolf-scorekort.html   # macOS
 
 Trykk **«Vis fullt scorekort»** for å se alle hull, totalt antall kast og total +/- per spiller. Lederen markeres tydelig.
 
+## Kart og utkast
+
+Trykk **📍 Kart** øverst under spilling for å åpne kartet. Det viser hvor du er (blå prikk) og utkastet for hullet du står på, hvis det er lagret (gul markør med hullnummeret). En gul prikk på Kart-knappen betyr at hullet har et lagret utkast.
+
+- **Lagre utkast her** lagrer GPS-posisjonen din som utkast for hullet. Finnes det allerede et utkast, blir du spurt før det erstattes.
+- Dra markøren for å finjustere plasseringen.
+- Knappen øverst bytter mellom **kart** og **flyfoto**.
+- Når utkastet er lagret, vises avstanden fra deg til utkastet.
+
+Utkastene lagres i runden. Er runden startet fra en lagret bane, oppdateres banen også, og de blir med når du lagrer banen som ny mal.
+
+> Kartet krever nett og at siden åpnes over `https://` (GPS virker ikke ellers). Resten av appen virker uten nett.
+
 ## Lagrede baner (maler)
 
 Har du spilt en bane før? Lagre den som en mal så slipper du å taste inn par på nytt hver gang:
@@ -98,6 +113,7 @@ Runden lagres automatisk på enheten mellom økter, helt til du trykker **«Star
 
 ## Teknisk
 
-- Ren HTML/CSS/JavaScript – ingen rammeverk, ingen bygg-steg, ingen avhengigheter
+- Ren HTML/CSS/JavaScript – ingen rammeverk, ingen bygg-steg
+- Kart med [Leaflet](https://leafletjs.com) (lastes først når kartet åpnes), kartdata fra © OpenStreetMap og flyfoto fra Esri
 - All state holdes i én JSON-struktur og lagres i `localStorage`
-- Ingen data sendes til noen server – alt skjer lokalt på enheten
+- Ingen data sendes til noen server – alt skjer lokalt på enheten (unntak: når kartet er åpent, hentes kartbilder for området fra OpenStreetMap eller Esri)
