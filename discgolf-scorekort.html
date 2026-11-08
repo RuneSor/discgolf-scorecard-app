@@ -166,6 +166,9 @@
     border-radius:50%;
     background: var(--line);
   }
+  /* Center the dots; auto margins keep them scrollable when they overflow */
+  .dot:first-child{ margin-left:auto; }
+  .dot:last-child{ margin-right:auto; }
   .dot.done{ background: var(--pine); }
   .dot.current{ background: var(--gold); width:12px; height:12px; }
 
