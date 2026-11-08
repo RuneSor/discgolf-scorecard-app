@@ -25,6 +25,7 @@
     --rust-soft: #c97a5d;
     --muted: #8c9a8e;
     --line: #d8e0d2;
+    --gps: #2b7bd6;
     --radius: 16px;
   }
   *{ box-sizing:border-box; }
@@ -404,7 +405,7 @@
     border-radius:50% 50% 50% 0;
     transform: rotate(-45deg);
     background: var(--gold);
-    border: 2.5px solid #fff;
+    border: 2.5px solid var(--surface);
     box-shadow: 0 2px 6px rgba(0,0,0,0.35);
     display:flex; align-items:center; justify-content:center;
   }
@@ -918,7 +919,7 @@ const MAP_LAYER_KEY = 'discgolf_kartlag_v1';
 const POOR_GPS_M = 25; // warn when accuracy is worse than this
 
 let mapLayerKey = 'map';
-try { const k = localStorage.getItem(MAP_LAYER_KEY); if (MAP_LAYERS[k]) mapLayerKey = k; } catch(e) {}
+try { const k = localStorage.getItem(MAP_LAYER_KEY); if (Object.hasOwn(MAP_LAYERS, k)) mapLayerKey = k; } catch(e) {}
 
 let leafletPromise = null;
 let lmap = null, mapTiles = null, teeMarker = null, posMarker = null, accCircle = null;
@@ -927,7 +928,8 @@ let mapLoadFailed = false;
 let fitPending = false;   // re-fit the view once the first GPS fix arrives
 let confirmReplace = false;
 let mapNote = '', mapNoteTimer = null;
-let gpsWatch = null, gpsPos = null, gpsError = null;
+let gpsWatch = null, gpsPos = null, gpsError = null, gpsAgeTimer = null;
+const STALE_GPS_S = 30; // a fix older than this is not used for saving
 
 function loadLeaflet(){
   if (window.L) return Promise.resolve();
@@ -942,10 +944,11 @@ function loadLeaflet(){
       js.src = LEAFLET_URL + 'leaflet.min.js';
       js.integrity = LEAFLET_SRI.js;
       js.crossOrigin = 'anonymous';
-      js.onload = () => resolve();
-      js.onerror = () => { leafletPromise = null; css.remove(); js.remove(); reject(); };
+      const loaded = el => new Promise((ok, fail) => { el.onload = ok; el.onerror = fail; });
+      const both = Promise.all([loaded(css), loaded(js)]);
       document.head.appendChild(css);
       document.head.appendChild(js);
+      both.then(() => resolve(), () => { leafletPromise = null; css.remove(); js.remove(); reject(); });
     });
   }
   return leafletPromise;
@@ -962,6 +965,11 @@ function openMap(){
   document.getElementById('mapOverlay').hidden = false;
   document.getElementById('mapTitle').innerHTML = `Hull ${mapHole+1} <span>· par ${state.pars[mapHole]}</span>`;
   updateLayerBtn();
+  if (location.protocol === 'file:'){
+    mapLoadFailed = true;
+    updateMapFoot();
+    return;
+  }
   updateMapFoot();
   startGps();
   loadLeaflet().then(() => {
@@ -1037,6 +1045,7 @@ function showTee(){
   if (!teeMarker){
     teeMarker = L.marker([tee.lat, tee.lng], { icon, draggable:true, zIndexOffset:1000, title:'Utkast' }).addTo(lmap);
     teeMarker.on('dragend', () => {
+      confirmReplace = false;
       const ll = teeMarker.getLatLng();
       const tmplName = setTee(mapHole, ll.lat, ll.lng);
       setMapNote(`Utkast flyttet${tmplName ? ` og lagret i «${escapeHtml(tmplName)}»` : ''} ✓`);
@@ -1048,16 +1057,23 @@ function showTee(){
 
 function startGps(){
   gpsError = null;
+  if (!window.isSecureContext){ gpsError = 'Posisjon krever at siden åpnes over https.'; return; }
   if (!navigator.geolocation){ gpsError = 'Enheten støtter ikke posisjon.'; return; }
   if (gpsWatch !== null) return;
   gpsWatch = navigator.geolocation.watchPosition(onGps, onGpsError,
     { enableHighAccuracy:true, maximumAge:5000, timeout:20000 });
+  // Re-check how old the position is even when no new fixes arrive
+  clearInterval(gpsAgeTimer);
+  gpsAgeTimer = setInterval(updateMapFoot, 5000);
 }
+function gpsAgeS(){ return gpsPos ? Math.round((Date.now() - gpsPos.t) / 1000) : 0; }
 function stopGps(){
   if (gpsWatch !== null){ navigator.geolocation.clearWatch(gpsWatch); gpsWatch = null; }
+  clearInterval(gpsAgeTimer);
 }
 function onGps(p){
-  gpsPos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy) };
+  // Use our own clock: some browsers report timestamps from a different epoch
+  gpsPos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy), t: Date.now() };
   gpsError = null;
   updateGpsMarker();
   if (fitPending && lmap){ fitMapView(); fitPending = false; }
@@ -1072,8 +1088,10 @@ function updateGpsMarker(){
   if (!lmap || !gpsPos) return;
   const ll = [gpsPos.lat, gpsPos.lng];
   if (!posMarker){
-    accCircle = L.circle(ll, { radius: gpsPos.acc, color:'#2b7bd6', weight:1, fillOpacity:0.12, interactive:false }).addTo(lmap);
-    posMarker = L.circleMarker(ll, { radius:8, color:'#fff', weight:3, fillColor:'#2b7bd6', fillOpacity:1, interactive:false }).addTo(lmap);
+    const css = getComputedStyle(document.documentElement);
+    const gps = css.getPropertyValue('--gps').trim(), ring = css.getPropertyValue('--surface').trim();
+    accCircle = L.circle(ll, { radius: gpsPos.acc, color:gps, weight:1, fillOpacity:0.12, interactive:false }).addTo(lmap);
+    posMarker = L.circleMarker(ll, { radius:8, color:ring, weight:3, fillColor:gps, fillOpacity:1, interactive:false }).addTo(lmap);
   } else {
     posMarker.setLatLng(ll);
     accCircle.setLatLng(ll).setRadius(gpsPos.acc);
@@ -1097,13 +1115,19 @@ function setMapNote(html){
 function updateMapFoot(){
   const tee = teeFor(mapHole);
   let status;
-  if (mapLoadFailed) status = 'Kunne ikke laste kartet. Sjekk nettforbindelsen.';
+  if (mapLoadFailed) status = location.protocol === 'file:'
+    ? 'Kartet virker bare når siden åpnes fra en nettadresse (http/https), ikke som fil.'
+    : 'Kunne ikke laste kartet. Sjekk nettforbindelsen.';
   else if (confirmReplace) status = `Erstatte lagret utkast for hull ${mapHole+1} med posisjonen din?`;
   else if (mapNote) status = mapNote;
   else if (gpsError) status = gpsError;
   else if (!gpsPos) status = 'Finner posisjonen din…';
-  else if (tee) status = `Avstand til utkast: <b>${Math.round(distanceM(tee, gpsPos))} m</b> · GPS ±${gpsPos.acc} m<br><small>Dra markøren for å finjustere</small>`;
-  else status = `Ingen utkast lagret for hull ${mapHole+1} · GPS ±${gpsPos.acc} m`;
+  else {
+    const gpsInfo = gpsAgeS() > STALE_GPS_S ? `⚠️ GPS sist oppdatert for ${gpsAgeS()} s siden` : `GPS ±${gpsPos.acc} m`;
+    status = tee
+      ? `Avstand til utkast: <b>${Math.round(distanceM(tee, gpsPos))} m</b> · ${gpsInfo}<br><small>Dra markøren for å finjustere</small>`
+      : `Ingen utkast lagret for hull ${mapHole+1} · ${gpsInfo}`;
+  }
 
   const actions = confirmReplace
     ? `<button class="btn btn-secondary" onclick="cancelReplaceTee()">Avbryt</button>
@@ -1118,6 +1142,15 @@ function updateMapFoot(){
 
 function saveTeeHere(){
   if (!gpsPos) return;
+  if (gpsAgeS() > STALE_GPS_S){
+    // Never save an old position: fetch a fresh one first, then continue
+    setMapNote('Henter ny posisjon…');
+    navigator.geolocation.getCurrentPosition(
+      p => { onGps(p); setMapNote(''); saveTeeHere(); },
+      () => setMapNote('Fant ikke ny posisjon. Prøv igjen.'),
+      { enableHighAccuracy:true, maximumAge:0, timeout:15000 });
+    return;
+  }
   if (teeFor(mapHole) && !confirmReplace){
     confirmReplace = true;
     updateMapFoot();
