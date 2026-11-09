@@ -341,29 +341,21 @@
     width:8px; height:8px; border-radius:50%;
     background: var(--gold);
   }
+  /* The map reuses .modal-overlay/.modal-box; these only change size and stacking */
   .map-overlay{
-    position: fixed;
-    inset: 0;
-    background: rgba(29,51,39,0.45);
-    display:flex;
-    align-items:center;
-    justify-content:center;
     padding: max(16px, env(safe-area-inset-top)) 12px max(16px, env(safe-area-inset-bottom));
     z-index: 200;
   }
   .map-overlay[hidden]{ display:none; }
   .map-box{
-    background: var(--surface);
+    padding: 0;
     border: 3px solid var(--pine);
-    border-radius: var(--radius);
-    width: 100%;
     max-width: 480px;
     height: 100%;
     max-height: 640px;
     display:flex;
     flex-direction:column;
     overflow:hidden;
-    box-shadow: 0 12px 40px rgba(29,51,39,0.3);
   }
   .map-head{
     display:flex;
@@ -420,8 +412,8 @@
 </head>
 <body>
 <div id="root"></div>
-<div id="mapOverlay" class="map-overlay" hidden onclick="if(event.target===this) closeMap()">
-  <div class="map-box" role="dialog" aria-label="Kart">
+<div id="mapOverlay" class="modal-overlay map-overlay" hidden onclick="if(event.target===this) closeMap()">
+  <div class="modal-box map-box" role="dialog" aria-label="Kart">
     <div class="map-head">
       <h2 id="mapTitle"></h2>
       <button class="map-layer-btn" id="mapLayerBtn" onclick="toggleMapLayer()"></button>
@@ -437,21 +429,26 @@
 
 <script>
 // ---------- State ----------
-let state = {
-  phase: 'setup', // setup | play | summary
-  numHoles: 18,
-  players: [], // {id, name}
-  pars: [],
-  scores: {}, // scores[playerId] = [throws...]
-  currentHole: 0,
-  nextPlayerId: 1,
-  pendingTemplatePars: null,
-  pendingTemplateName: null,
-  pendingTemplateTees: null,
-  pendingTemplateId: null,
-  tees: [], // tees[holeIdx] = {lat, lng} or null
-  templateId: null, // id of the course template this round was started from (or last saved as)
-};
+function newState(){
+  return {
+    phase: 'setup', // setup | play | summary
+    numHoles: 18,
+    players: [], // {id, name}
+    pars: [],
+    scores: {}, // scores[playerId] = [throws...]
+    currentHole: 0,
+    nextPlayerId: 1,
+    pendingTemplateId: null, // template picked in setup, applied by startRound
+    tees: [], // tees[holeIdx] = {lat, lng} or null; numHoles long once the round has started
+    templateId: null, // id of the course template this round was started from (or last saved as)
+  };
+}
+let state = newState();
+
+// Pad (or trim) a tees array to n holes; also fixes data saved before tees existed
+function padTees(tees, n){
+  return Array.from({length: n}, (_, i) => (Array.isArray(tees) && tees[i]) || null);
+}
 
 let courseTemplates = [];
 const COURSE_KEY = 'discgolf_baner_v1';
@@ -460,8 +457,10 @@ let modal = null; // transient UI state, not persisted: {type:'confirm'|'prompt'
 function loadTemplates(){
   try {
     const raw = localStorage.getItem(COURSE_KEY);
-    courseTemplates = raw ? (JSON.parse(raw) || []) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    courseTemplates = Array.isArray(parsed) ? parsed.filter(t => t && typeof t === 'object') : [];
   } catch(e) { courseTemplates = []; }
+  courseTemplates.forEach(t => { t.tees = padTees(t.tees, t.numHoles); });
 }
 function saveTemplates(){
   try { localStorage.setItem(COURSE_KEY, JSON.stringify(courseTemplates)); } catch(e) {}
@@ -473,7 +472,7 @@ function saveCourseAsTemplate(){
 }
 function doSaveCourseAsTemplate(name){
   const id = Date.now();
-  courseTemplates.push({ id, name, numHoles: state.numHoles, pars: state.pars.slice(), tees: teesForRound() });
+  courseTemplates.push({ id, name, numHoles: state.numHoles, pars: state.pars.slice(), tees: state.tees.slice() });
   saveTemplates();
   // The new template is now the one in use, so later tee updates go to it
   state.templateId = id;
@@ -482,11 +481,12 @@ function useTemplate(id){
   const tmpl = courseTemplates.find(t => t.id === id);
   if (!tmpl) return;
   state.numHoles = tmpl.numHoles;
-  state.pendingTemplatePars = tmpl.pars.slice();
-  state.pendingTemplateName = tmpl.name;
-  state.pendingTemplateTees = Array.isArray(tmpl.tees) ? tmpl.tees.slice() : null;
   state.pendingTemplateId = tmpl.id;
   render();
+}
+function pendingTemplate(){
+  if (state.pendingTemplateId === null) return null;
+  return courseTemplates.find(t => t.id === state.pendingTemplateId) || null;
 }
 function deleteTemplate(id){
   modal = { type:'confirm', message:'Slette denne banen?', action:'deleteTemplate', payload:id };
@@ -495,6 +495,7 @@ function deleteTemplate(id){
 function doDeleteTemplate(id){
   courseTemplates = courseTemplates.filter(t => t.id !== id);
   saveTemplates();
+  if (state.pendingTemplateId === id) state.pendingTemplateId = null;
 }
 
 const STORAGE_KEY = 'discgolf_scorekort_v1';
@@ -502,7 +503,7 @@ const STORAGE_KEY = 'discgolf_scorekort_v1';
 function saveState(){
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch(e) { /* lagring utilgjengelig - fortsetter uten å lagre */ }
+  } catch(e) { /* storage unavailable: carry on without saving */ }
 }
 function loadState(){
   try {
@@ -510,9 +511,19 @@ function loadState(){
     if (!raw) return;
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && parsed.phase) {
-      state = parsed;
+      // Fill in fields added in later versions, then drop ones no longer used
+      state = Object.assign(newState(), parsed);
+      state.tees = padTees(state.tees, state.numHoles);
+      // Older versions stored the picked template by name instead of id
+      if (state.pendingTemplateName && state.pendingTemplateId === null){
+        const t = courseTemplates.find(t => t.name === state.pendingTemplateName && t.numHoles === state.numHoles);
+        if (t) state.pendingTemplateId = t.id;
+      }
+      delete state.pendingTemplatePars;
+      delete state.pendingTemplateName;
+      delete state.pendingTemplateTees;
     }
-  } catch(e) { /* korrupt eller utilgjengelig lagring - starter friskt */ }
+  } catch(e) { /* corrupt or unavailable storage: start fresh */ }
 }
 
 function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
@@ -555,27 +566,15 @@ function removePlayer(id){
 }
 function updateHoleCount(v){
   state.numHoles = clamp(parseInt(v)||1, 1, 36);
-  clearPendingTemplate();
-}
-function clearPendingTemplate(){
-  state.pendingTemplatePars = null;
-  state.pendingTemplateName = null;
-  state.pendingTemplateTees = null;
   state.pendingTemplateId = null;
 }
 function startRound(){
   if (state.players.length === 0) return;
-  const fromTemplate = state.pendingTemplatePars && state.pendingTemplatePars.length === state.numHoles;
-  if (fromTemplate) {
-    state.pars = state.pendingTemplatePars.slice();
-    state.templateId = state.pendingTemplateId;
-  } else {
-    state.pars = Array(state.numHoles).fill(3);
-    state.templateId = null;
-  }
-  state.tees = Array.from({length: state.numHoles}, (_, i) =>
-    (fromTemplate && state.pendingTemplateTees && state.pendingTemplateTees[i]) || null);
-  clearPendingTemplate();
+  const tmpl = pendingTemplate();
+  state.pars = tmpl ? tmpl.pars.slice() : Array(state.numHoles).fill(3);
+  state.tees = padTees(tmpl && tmpl.tees, state.numHoles);
+  state.templateId = tmpl ? tmpl.id : null;
+  state.pendingTemplateId = null;
   state.players.forEach(p => { state.scores[p.id] = Array(state.numHoles).fill(null); });
   state.currentHole = 0;
   state.phase = 'play';
@@ -612,9 +611,7 @@ function newRound(){
   render();
 }
 function doNewRound(){
-  state = { phase:'setup', numHoles:18, players:[], pars:[], scores:{}, currentHole:0, nextPlayerId:1,
-    pendingTemplatePars:null, pendingTemplateName:null, pendingTemplateTees:null, pendingTemplateId:null,
-    tees:[], templateId:null };
+  state = newState();
   try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
 }
 
@@ -640,27 +637,18 @@ function confirmModalAction(){
 }
 
 // ---------- Tees ----------
-// Rounds saved before tees existed have no tees array, so always read through these helpers
-function teeFor(holeIdx){
-  return (Array.isArray(state.tees) && state.tees[holeIdx]) || null;
-}
-function teesForRound(){
-  return Array.from({length: state.numHoles}, (_, i) => teeFor(i));
-}
 // Returns the name of the template that was updated, or null
 function setTee(holeIdx, lat, lng){
   const tee = { lat: +lat.toFixed(6), lng: +lng.toFixed(6) };
-  state.tees = teesForRound();
   state.tees[holeIdx] = tee;
   // Keep the course template in use up to date
-  const tmpl = courseTemplates.find(t => t.id === state.templateId);
-  if (tmpl && tmpl.numHoles === state.numHoles) {
-    tmpl.tees = Array.from({length: tmpl.numHoles}, (_, i) => (tmpl.tees && tmpl.tees[i]) || null);
+  const tmpl = courseTemplates.find(t => t.id === state.templateId && t.numHoles === state.numHoles);
+  if (tmpl) {
     tmpl.tees[holeIdx] = tee;
     saveTemplates();
   }
   render();
-  return tmpl && tmpl.numHoles === state.numHoles ? tmpl.name : null;
+  return tmpl ? tmpl.name : null;
 }
 
 // ---------- Totals ----------
@@ -683,6 +671,7 @@ function chainmarkSVG(size){
 }
 
 function renderSetup(){
+  const picked = pendingTemplate();
   return `
     <div class="topbar">${chainmarkSVG(30)}<h1>Scorekort</h1></div>
     <div class="card">
@@ -690,7 +679,7 @@ function renderSetup(){
         <label>Antall hull</label>
         <input type="number" min="1" max="36" value="${state.numHoles}"
           oninput="updateHoleCount(this.value)">
-        ${state.pendingTemplatePars ? `<div style="font-size:13px;color:var(--pine); margin-top:6px; font-weight:600;">✓ Par hentet fra «${escapeHtml(state.pendingTemplateName)}»</div>` : ''}
+        ${picked ? `<div style="font-size:13px;color:var(--pine); margin-top:6px; font-weight:600;">✓ Par hentet fra «${escapeHtml(picked.name)}»</div>` : ''}
       </div>
       <div class="field">
         <label>Lagrede baner</label>
@@ -756,7 +745,7 @@ function renderPlay(){
   return `
     <div class="topbar">
       ${chainmarkSVG(26)}<h1 style="font-size:22px;">Scorekort</h1>
-      <button class="btn-pill btn-map" onclick="openMap()" aria-label="Vis kart">📍 Kart${teeFor(h) ? '<span class="has-tee" title="Utkast lagret"></span>' : ''}</button>
+      <button class="btn-pill btn-map" onclick="openMap()" aria-label="Vis kart">📍 Kart${state.tees[h] ? '<span class="has-tee" title="Utkast lagret"></span>' : ''}</button>
     </div>
     <div class="hole-header">
       <button class="nav-arrow" onclick="goHole(-1)" ${h===0 ? 'disabled':''} aria-label="Forrige hull">‹</button>
@@ -1019,7 +1008,7 @@ function updateLayerBtn(){
 
 function fitMapView(){
   if (!lmap) return;
-  const tee = teeFor(mapHole);
+  const tee = state.tees[mapHole];
   if (tee && gpsPos && distanceM(tee, gpsPos) < 1500){
     lmap.fitBounds([[tee.lat, tee.lng], [gpsPos.lat, gpsPos.lng]], { padding:[50,50], maxZoom:18 });
   } else if (tee){
@@ -1031,7 +1020,7 @@ function fitMapView(){
 
 function showTee(){
   if (!lmap) return;
-  const tee = teeFor(mapHole);
+  const tee = state.tees[mapHole];
   if (!tee){
     if (teeMarker){ lmap.removeLayer(teeMarker); teeMarker = null; }
     return;
@@ -1113,7 +1102,7 @@ function setMapNote(html){
 }
 
 function updateMapFoot(){
-  const tee = teeFor(mapHole);
+  const tee = state.tees[mapHole];
   let status;
   if (mapLoadFailed) status = location.protocol === 'file:'
     ? 'Kartet virker bare når siden åpnes fra en nettadresse (http/https), ikke som fil.'
@@ -1151,7 +1140,7 @@ function saveTeeHere(){
       { enableHighAccuracy:true, maximumAge:0, timeout:15000 });
     return;
   }
-  if (teeFor(mapHole) && !confirmReplace){
+  if (state.tees[mapHole] && !confirmReplace){
     confirmReplace = true;
     updateMapFoot();
     return;
@@ -1168,8 +1157,8 @@ function cancelReplaceTee(){
   updateMapFoot();
 }
 
-loadState();
 loadTemplates();
+loadState();
 render();
 </script>
 </body>
