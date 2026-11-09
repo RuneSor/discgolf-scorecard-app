@@ -7,7 +7,7 @@ En superenkel, dynamisk scorekort-app for discgolf. Fungerer for enhver bane og 
     <td align="center"><img src="docs/screenshots/1-oppsett.png" width="190" alt="Oppsett av runde med lagrede baner og spillere"><br><sub>Sett opp runden</sub></td>
     <td align="center"><img src="docs/screenshots/2-spill.png" width="190" alt="Poengregistrering på hull 5"><br><sub>Registrer poeng</sub></td>
     <td align="center"><img src="docs/screenshots/3-scorekort.png" width="190" alt="Fullt scorekort med leder"><br><sub>Fullt scorekort</sub></td>
-    <td align="center"><img src="docs/screenshots/4-kart.png" width="190" alt="Kart med lagret utkast og egen posisjon"><br><sub>Kart med utkast</sub></td>
+    <td align="center"><img src="docs/screenshots/4-kart.jpg" width="190" alt="Kart med lagret utkast og egen posisjon"><br><sub>Kart med utkast</sub></td>
   </tr>
 </table>
 

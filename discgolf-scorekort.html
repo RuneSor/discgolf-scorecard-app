@@ -439,7 +439,7 @@ function newState(){
     currentHole: 0,
     nextPlayerId: 1,
     pendingTemplateId: null, // template picked in setup, applied by startRound
-    tees: [], // tees[holeIdx] = {lat, lng} or null, always numHoles long
+    tees: [], // tees[holeIdx] = {lat, lng} or null; numHoles long once the round has started
     templateId: null, // id of the course template this round was started from (or last saved as)
   };
 }
@@ -457,7 +457,8 @@ let modal = null; // transient UI state, not persisted: {type:'confirm'|'prompt'
 function loadTemplates(){
   try {
     const raw = localStorage.getItem(COURSE_KEY);
-    courseTemplates = raw ? (JSON.parse(raw) || []) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    courseTemplates = Array.isArray(parsed) ? parsed.filter(t => t && typeof t === 'object') : [];
   } catch(e) { courseTemplates = []; }
   courseTemplates.forEach(t => { t.tees = padTees(t.tees, t.numHoles); });
 }
@@ -485,7 +486,7 @@ function useTemplate(id){
 }
 function pendingTemplate(){
   if (state.pendingTemplateId === null) return null;
-  return courseTemplates.find(t => t.id === state.pendingTemplateId && t.numHoles === state.numHoles) || null;
+  return courseTemplates.find(t => t.id === state.pendingTemplateId) || null;
 }
 function deleteTemplate(id){
   modal = { type:'confirm', message:'Slette denne banen?', action:'deleteTemplate', payload:id };
@@ -494,6 +495,7 @@ function deleteTemplate(id){
 function doDeleteTemplate(id){
   courseTemplates = courseTemplates.filter(t => t.id !== id);
   saveTemplates();
+  if (state.pendingTemplateId === id) state.pendingTemplateId = null;
 }
 
 const STORAGE_KEY = 'discgolf_scorekort_v1';
@@ -501,7 +503,7 @@ const STORAGE_KEY = 'discgolf_scorekort_v1';
 function saveState(){
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch(e) { /* lagring utilgjengelig - fortsetter uten å lagre */ }
+  } catch(e) { /* storage unavailable: carry on without saving */ }
 }
 function loadState(){
   try {
@@ -512,6 +514,11 @@ function loadState(){
       // Fill in fields added in later versions, then drop ones no longer used
       state = Object.assign(newState(), parsed);
       state.tees = padTees(state.tees, state.numHoles);
+      // Older versions stored the picked template by name instead of id
+      if (state.pendingTemplateName && state.pendingTemplateId === null){
+        const t = courseTemplates.find(t => t.name === state.pendingTemplateName && t.numHoles === state.numHoles);
+        if (t) state.pendingTemplateId = t.id;
+      }
       delete state.pendingTemplatePars;
       delete state.pendingTemplateName;
       delete state.pendingTemplateTees;
@@ -664,6 +671,7 @@ function chainmarkSVG(size){
 }
 
 function renderSetup(){
+  const picked = pendingTemplate();
   return `
     <div class="topbar">${chainmarkSVG(30)}<h1>Scorekort</h1></div>
     <div class="card">
@@ -671,7 +679,7 @@ function renderSetup(){
         <label>Antall hull</label>
         <input type="number" min="1" max="36" value="${state.numHoles}"
           oninput="updateHoleCount(this.value)">
-        ${pendingTemplate() ? `<div style="font-size:13px;color:var(--pine); margin-top:6px; font-weight:600;">✓ Par hentet fra «${escapeHtml(pendingTemplate().name)}»</div>` : ''}
+        ${picked ? `<div style="font-size:13px;color:var(--pine); margin-top:6px; font-weight:600;">✓ Par hentet fra «${escapeHtml(picked.name)}»</div>` : ''}
       </div>
       <div class="field">
         <label>Lagrede baner</label>
@@ -1149,8 +1157,8 @@ function cancelReplaceTee(){
   updateMapFoot();
 }
 
-loadState();
 loadTemplates();
+loadState();
 render();
 </script>
 </body>
